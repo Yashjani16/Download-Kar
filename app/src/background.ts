@@ -619,10 +619,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "page_download_media") {
-    return sendReply(sendResponse, resourceBridge.downloadPageMedia(sender, {
-      selection: message.selection,
-      href: String(message.href ?? ""),
-      title: String(message.title ?? ""),
+    return sendReply(sendResponse, ready.then(async () => {
+      // With the desktop app running, every on-page download goes through it: it handles
+      // streams, separate video/audio tracks and logged-in sites, and always gives an MP4.
+      if (await desktopBridge.isDesktopRunning()) {
+        const pageUrl = sender.url || sender.tab?.url || "";
+        const link = typeof message.link === "string" && sameSite(message.link, pageUrl) ? message.link : "";
+        return desktopBridge.sendSelectionToDesktop(
+          message.selection,
+          pageUrl,
+          sender.frameId ? "" : String(message.title ?? sender.tab?.title ?? ""),
+          link,
+        );
+      }
+      return resourceBridge.downloadPageMedia(sender, {
+        selection: message.selection,
+        href: String(message.href ?? ""),
+        title: String(message.title ?? ""),
+      });
     }));
   }
 

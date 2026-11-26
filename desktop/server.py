@@ -18,7 +18,7 @@ from flask import Flask, jsonify, render_template, request
 
 APP_NAME = "Download Kar"
 APP_ID = "download-kar-desktop"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 PORT = int(os.environ.get("DK_PORT", "48123"))
 HOST = "127.0.0.1"
 MAX_PARALLEL = 3

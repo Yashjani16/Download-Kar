@@ -127,6 +127,11 @@ const DISMISS_ICON = `<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="cu
             .status:empty {
                 display: none;
             }
+            .status {
+                max-width: 220px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
             [data-phase="sent"] .status,
             [data-phase="sent"] .icon {
                 color: #0e700e;
@@ -252,6 +257,7 @@ const DISMISS_ICON = `<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="cu
     icon.innerHTML = style === "compact" ? PHASE_ICONS[phase] : PHASE_ICONS.idle;
     label.textContent = phase === "busy" ? phaseText : chrome.i18n.getMessage("downloadThisMedia");
     status.textContent = phase === "sent" || phase === "failed" ? phaseText : "";
+    button.title = status.textContent || "";
     tooltip.textContent = tooltipText();
     scheduleUpdate();
   }
@@ -365,22 +371,17 @@ const DISMISS_ICON = `<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="cu
       return;
     }
 
+    // Download Kar: skip tiny videos (thumbnail previews, ads) and sit inside the video's
+    // top-right corner, so the button never covers the page's own header or menus.
+    if (selected.rect.width < 200 || selected.rect.height < 112) {
+      hideButton();
+      return;
+    }
     const gap = 8;
     const buttonWidth = host.offsetWidth || 112;
     const buttonHeight = host.offsetHeight || 32;
-    let left = Math.min(selected.rect.right - buttonWidth, innerWidth - buttonWidth - gap);
-    let top = selected.rect.top - buttonHeight - gap;
-
-    if (top < gap) {
-      top = selected.rect.bottom + gap;
-    }
-    if (top + buttonHeight > innerHeight - gap) {
-      left = selected.rect.right + gap;
-      top = selected.rect.top;
-      if (left + buttonWidth > innerWidth - gap) {
-        left = selected.rect.left - buttonWidth - gap;
-      }
-    }
+    let left = Math.min(selected.rect.right - buttonWidth - gap, innerWidth - buttonWidth - gap);
+    let top = Math.min(Math.max(selected.rect.top, 0) + gap, selected.rect.bottom - buttonHeight - gap);
 
     left += dragOffsetX;
     top += dragOffsetY;
@@ -497,6 +498,7 @@ const DISMISS_ICON = `<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="cu
         selection: resolution.selection,
         href: location.href,
         title: document.title,
+        link: VIDEO_LINK.test(location.href) ? "" : videoLinkFor(media),
       });
       const ok = Boolean(result?.ok);
       if (ok) {

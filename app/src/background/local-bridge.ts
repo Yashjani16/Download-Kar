@@ -291,6 +291,31 @@ export function createLocalBridge(options: LocalBridgeOptions = {}) {
     }
   }
 
+  /**
+   * The on-page Download button, routed through the desktop app. A plain video file or a
+   * stream playlist is sent as-is (named after the page); anything else (separate
+   * video/audio tracks, YouTube-style players, pieces of a stream) is sent as the video's
+   * page link, which yt-dlp knows how to download.
+   */
+  async function sendSelectionToDesktop(
+    selection: { kind?: string; url?: string; pageUrl?: string } | null,
+    pageUrl: string,
+    title: string,
+    link: string,
+  ): Promise<CommandResult> {
+    const fileUrl = String(selection?.url ?? "");
+    const isWebFile = /^https?:/i.test(fileUrl);
+    const PROGRESSIVE = /\.(mp4|m4v|mov|webm|mkv|mp3|m4a|ogg|oga|wav|flac|aac)(?:$|[?#])/i;
+    if (isWebFile && selection?.kind === "stream") {
+      return sendToDesktop(fileUrl, title, "video", { referer: pageUrl, useTitleAsName: true });
+    }
+    if (isWebFile && selection?.kind === "single" && PROGRESSIVE.test(fileUrl) && !link) {
+      return sendToDesktop(fileUrl, title, "video", { referer: pageUrl, useTitleAsName: true });
+    }
+    const target = link || String(selection?.pageUrl || "") || pageUrl;
+    return sendToDesktop(target, link ? "" : title);
+  }
+
   async function desktopTaskSummaries(): Promise<TaskSummary[]> {
     if (desktopRefs.size === 0) { return []; }
     try {
@@ -517,5 +542,6 @@ export function createLocalBridge(options: LocalBridgeOptions = {}) {
     loadPersistentState,
     sendRequest,
     sendToDesktop,
+    sendSelectionToDesktop,
   };
 }
