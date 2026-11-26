@@ -9,6 +9,7 @@ const DESKTOP_JOBS_KEY = "dkDesktopJobs";
 const DESKTOP_URL = "http://127.0.0.1:48123";
 const DESKTOP_APP_ID = "download-kar-desktop";
 const DESKTOP_TASK_PREFIX = "desktop:";
+const DESKTOP_SEEN_KEY = "dkDesktopSeen";
 // Filled in at build time (GitHub Actions sets it to this repo's Releases page).
 declare const __DK_RELEASES_URL__: string;
 const RELEASES_URL = typeof __DK_RELEASES_URL__ === "string" ? __DK_RELEASES_URL__ : "";
@@ -198,9 +199,42 @@ export function createLocalBridge(options: LocalBridgeOptions = {}) {
   async function isDesktopRunning(): Promise<boolean> {
     try {
       const ping = await desktopRequest<{ app?: string }>("/api/ping", {}, 1500);
-      return ping.app === DESKTOP_APP_ID;
+      if (ping.app === DESKTOP_APP_ID) {
+        void chrome.storage.local.set({ [DESKTOP_SEEN_KEY]: true });
+        return true;
+      }
+      return false;
     } catch {
       return false;
+    }
+  }
+
+  // Sites where downloads already work without a login; their cookies are never sent.
+  const NO_COOKIE_SITES = /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com)$/i;
+
+  /** The user's cookies for this one site, in the cookies.txt format yt-dlp reads. */
+  async function siteCookies(url: string): Promise<string> {
+    try {
+      const host = new URL(url).hostname;
+      if (NO_COOKIE_SITES.test(host) || !chrome.cookies?.getAll) { return ""; }
+      const cookies = await chrome.cookies.getAll({ url });
+      if (cookies.length === 0) { return ""; }
+      const lines = ["# Netscape HTTP Cookie File"];
+      for (const c of cookies) {
+        const domain = c.hostOnly ? c.domain.replace(/^\./, "") : (c.domain.startsWith(".") ? c.domain : `.${c.domain}`);
+        lines.push([
+          domain,
+          c.hostOnly ? "FALSE" : "TRUE",
+          c.path || "/",
+          c.secure ? "TRUE" : "FALSE",
+          String(Math.floor(c.expirationDate ?? 0)),
+          c.name,
+          c.value,
+        ].join("\t"));
+      }
+      return lines.join("\n") + "\n";
+    } catch {
+      return "";
     }
   }
 
@@ -209,16 +243,22 @@ export function createLocalBridge(options: LocalBridgeOptions = {}) {
       return { ok: false, message: msg("errorInvalidDownloadRequest", "This page can't be downloaded.") };
     }
     if (!(await isDesktopRunning())) {
-      if (RELEASES_URL) { void chrome.tabs.create({ url: RELEASES_URL }); }
+      // First time only: show where to get the app. After that, just ask to open it.
+      const seen = (await chrome.storage.local.get(DESKTOP_SEEN_KEY))[DESKTOP_SEEN_KEY];
+      if (RELEASES_URL && !seen) { void chrome.tabs.create({ url: RELEASES_URL }); }
       return {
         ok: false,
         message: msg("dkDesktopNeeded", "Open the Download Kar desktop app to download from this site."),
       };
     }
     try {
+      // The site's cookies let the app download what you can watch while logged in
+      // (LinkedIn, Facebook, X, ...). They go only to the app on this computer, are used
+      // for this one download and deleted afterwards.
+      const cookies = await siteCookies(url);
       const result = await desktopRequest<{ job_id: string }>("/api/download", {
         method: "POST",
-        body: JSON.stringify({ url, title, format }),
+        body: JSON.stringify({ url, title, format, cookies }),
       });
       desktopRefs.set(result.job_id, { id: result.job_id, url, title, format, createdAt: Date.now() });
       await persist();

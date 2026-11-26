@@ -428,6 +428,14 @@ const DISMISS_ICON = `<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="cu
     requestAnimationFrame(updatePosition);
   }
 
+  async function sendPageToDesktop(media: HTMLMediaElement): Promise<void> {
+    setPhase("busy", chrome.i18n.getMessage("sending"));
+    const result = await chrome.runtime.sendMessage({ type: "page_desktop_download", title: document.title });
+    const ok = Boolean(result?.ok);
+    setPhase(ok ? "sent" : "failed", result?.message || chrome.i18n.getMessage(ok ? "sent" : "errorSendFailed"));
+    window.__gdPageMedia?.markDispatchResult?.(media, ok, result?.message || "");
+  }
+
   let downloadInFlight = false;
   async function downloadMedia(): Promise<void> {
     if (downloadInFlight) { return; }
@@ -456,12 +464,10 @@ const DISMISS_ICON = `<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="cu
         poster: media.poster || "",
         linkUrl: media.closest<HTMLAnchorElement>("a[href]")?.href ?? "",
       }, onState);
-      if (!resolution || resolution.kind === "refused") {
-        setPhase("failed", resolution?.message || chrome.i18n.getMessage("errorCannotLocateMedia"));
-        return;
-      }
-      if (resolution.kind !== "selection") {
-        setPhase("failed", chrome.i18n.getMessage("errorCannotLocateMedia"));
+      if (!resolution || resolution.kind !== "selection") {
+        // Download Kar: the page hides its video file (LinkedIn, Facebook, X, ...). Hand the
+        // page to the Download Kar desktop app instead, which knows how to get it.
+        await sendPageToDesktop(media);
         return;
       }
       const result = await chrome.runtime.sendMessage({

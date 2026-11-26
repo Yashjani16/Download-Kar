@@ -10,7 +10,7 @@ Free downloader for Windows and macOS, in two parts:
 **Extension**
 - **Resources tab**: lists the videos, audio, PDFs and other files the current page loads. Click one to download it.
 - **"Download this page" bar** (Resources tab): sends the page to the desktop app as a video (MP4) or audio (MP3).
-- **On-page media button**: a download button over videos. On YouTube-type sites it uses the desktop app.
+- **On-page Download button**: hover over any video and click **Download**. If the page hides its video file (YouTube, LinkedIn, Facebook, X, ...), the desktop app takes over automatically.
 - **Images tab**: scan the page for images and download several at once.
 - **Stream videos (m3u8 / HLS)**: a built-in stream downloader that joins the parts into one MP4.
 - **Right-click menu**: download a link, image or video, or send the page to the desktop app as MP4 or MP3.
@@ -67,6 +67,8 @@ cd desktop && pip install -r requirements.txt && python main.py
 - `.github/workflows/release.yml`: builds and publishes everything
 
 ## Security
+
+**Logged-in sites (LinkedIn, Facebook, X, ...):** when you download through the extension, it passes your cookies for that one site to the desktop app, so anything you can watch while logged in can be downloaded. The cookies never leave your computer. The app uses them for that single download, keeps them in a file only you can read, and deletes it when the download finishes. YouTube cookies are never sent.
 
 The desktop app only listens on your own computer (`127.0.0.1`). It accepts requests only from its own window and from browser extensions. Websites you visit are refused, so a page can't start downloads or open files on your computer.
 

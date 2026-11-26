@@ -108,7 +108,7 @@
     "message": "Disconnected"
   },
   "downloadThisMedia": {
-    "message": "Download this media"
+    "message": "Download"
   },
   "mediaButtonLabel": {
     "message": "Media button"
@@ -1870,7 +1870,7 @@
     "message": "File Name"
   },
   "dkDesktopNeeded": {
-    "message": "Open the Download Kar desktop app to download from this site (YouTube, Instagram, TikTok and more need it)."
+    "message": "Open the Download Kar app on your computer, then try again. (Sites like YouTube, Instagram, LinkedIn and Facebook need it.)"
   },
   "dkSentToDesktop": {
     "message": "Downloading with Download Kar Desktop"

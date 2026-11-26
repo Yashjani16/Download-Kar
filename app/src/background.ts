@@ -595,6 +595,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "page_desktop_download") {
+    // The on-page button couldn't find a direct file: send the page (or the embedded
+    // player's frame) to the desktop app. The address comes from the browser, not the page.
+    const frameUrl = sender.url || sender.tab?.url || "";
+    const title = sender.frameId ? "" : String(message.title ?? sender.tab?.title ?? "");
+    return sendReply(sendResponse, ready.then(() => desktopBridge.sendToDesktop(frameUrl, title)));
+  }
+
   if (message.type === "page_download_media") {
     return sendReply(sendResponse, resourceBridge.downloadPageMedia(sender, {
       selection: message.selection,
