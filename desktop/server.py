@@ -18,7 +18,7 @@ from flask import Flask, jsonify, render_template, request
 
 APP_NAME = "Download Kar"
 APP_ID = "download-kar-desktop"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 PORT = int(os.environ.get("DK_PORT", "48123"))
 HOST = "127.0.0.1"
 MAX_PARALLEL = 3
@@ -227,10 +227,14 @@ def run_download(job_id: str) -> None:
         if job["format"] == "audio":
             cmd += ["-x", "--audio-format", "mp3"]
         elif job.get("format_id"):
-            cmd += ["-f", f"{job['format_id']}+bestaudio/best", "--merge-output-format", "mp4"]
+            fid = job["format_id"]
+            cmd += ["-f", f"{fid}+bestaudio[acodec^=mp4a]/{fid}+bestaudio/best",
+                    "-S", "vcodec:h264,res,acodec:m4a", "--merge-output-format", "mp4"]
         else:
-            # Prefer H.264/AAC so the file plays everywhere (QuickTime, Windows Media Player, phones).
-            cmd += ["-S", "vcodec:h264,res,acodec:m4a", "--merge-output-format", "mp4"]
+            # Prefer H.264/AAC so the file plays everywhere (QuickTime, Windows Media Player,
+            # phones). On YouTube that means up to 1080p.
+            cmd += ["-f", "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*[vcodec^=avc1]+ba/b[vcodec^=avc1]/bv*+ba/b",
+                    "-S", "vcodec:h264,res,acodec:m4a", "--merge-output-format", "mp4"]
         cmd.append(job["url"])
 
         try:
@@ -381,10 +385,14 @@ def get_info():
         if result.returncode != 0:
             return jsonify({"error": last_error_line(result.stderr)}), 400
         info = parse_ytdlp_json(result.stdout)
+        video_formats = [f for f in info.get("formats", []) if f.get("height") and f.get("vcodec", "none") != "none"]
+        # Offer only H.264 qualities when the site has them (YouTube: up to 1080p): VP9/AV1
+        # in an .mp4 doesn't play in QuickTime and many other players.
+        h264 = [f for f in video_formats if str(f.get("vcodec", "")).startswith("avc1")]
         best_by_height = {}
-        for f in info.get("formats", []):
+        for f in (h264 or video_formats):
             height = f.get("height")
-            if height and f.get("vcodec", "none") != "none":
+            if height:
                 tbr = f.get("tbr") or 0
                 if height not in best_by_height or tbr > (best_by_height[height].get("tbr") or 0):
                     best_by_height[height] = f
