@@ -46,6 +46,16 @@ function isManifestUrl(url: string): boolean {
   return /\.(m3u8|mpd)(?:$|[?#])/i.test(url);
 }
 
+/** HLS/DASH playlist, judged by its address or by the name the extension gave it. */
+function isManifest(url: string, filename: string): boolean {
+  return isManifestUrl(url) || /\.(m3u8|mpd)$/i.test(filename.trim());
+}
+
+/** "(3) Feed | LinkedIn.mpd" -> "Feed | LinkedIn" (drops unread counts and the extension). */
+function cleanTitle(title: string): string {
+  return title.replace(/^\(\d+\+?\)\s*/, "").replace(/\.(m3u8|mpd|m4s|ts)$/i, "").trim();
+}
+
 function safeFilename(name: string): string {
   return String(name ?? "")
     .replace(/[<>:"/\\|?*~\x00-\x1f]+/g, " ")
@@ -238,7 +248,12 @@ export function createLocalBridge(options: LocalBridgeOptions = {}) {
     }
   }
 
-  async function sendToDesktop(url: string, title: string, format: "video" | "audio" = "video"): Promise<CommandResult> {
+  async function sendToDesktop(
+    url: string,
+    title: string,
+    format: "video" | "audio" = "video",
+    options: { referer?: string; useTitleAsName?: boolean } = {},
+  ): Promise<CommandResult> {
     if (!/^https?:/i.test(url)) {
       return { ok: false, message: msg("errorInvalidDownloadRequest", "This page can't be downloaded.") };
     }
@@ -258,7 +273,14 @@ export function createLocalBridge(options: LocalBridgeOptions = {}) {
       const cookies = await siteCookies(url);
       const result = await desktopRequest<{ job_id: string }>("/api/download", {
         method: "POST",
-        body: JSON.stringify({ url, title, format, cookies }),
+        body: JSON.stringify({
+          url,
+          title: cleanTitle(title),
+          format,
+          cookies,
+          referer: options.referer ?? "",
+          use_title: Boolean(options.useTitleAsName),
+        }),
       });
       desktopRefs.set(result.job_id, { id: result.job_id, url, title, format, createdAt: Date.now() });
       await persist();
@@ -378,8 +400,15 @@ export function createLocalBridge(options: LocalBridgeOptions = {}) {
     }
 
     const url = String(body.url ?? "");
-    if (isManifestUrl(url)) {
-      return openStreamDownloader(url, String(body.headers?.referer ?? ""), String(body.filename ?? payload.title ?? ""));
+    const filename = String(body.filename ?? payload.title ?? "");
+    if (isManifest(url, filename)) {
+      // A stream (LinkedIn, news sites, ...): the desktop app joins all its pieces into one
+      // MP4. Without the app, fall back to the in-browser stream downloader page.
+      const referer = String(body.headers?.referer ?? "");
+      if (await isDesktopRunning()) {
+        return sendToDesktop(url, filename, "video", { referer, useTitleAsName: true });
+      }
+      return openStreamDownloader(url, referer, filename);
     }
     return addDownload(url, String(body.filename ?? payload.title ?? ""), Boolean(payload.draft));
   }

@@ -8,7 +8,7 @@ from PyInstaller.utils.hooks import collect_all
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
-VERSION = os.environ.get("DK_VERSION", "1.2.0")
+VERSION = os.environ.get("DK_VERSION", "1.2.1")
 
 datas = [
     (os.path.join(ROOT, "templates"), "templates"),
@@ -20,11 +20,28 @@ if os.path.isdir(bin_dir):
     # Shipped as plain data: server.py copies them to the user's data folder on first run.
     datas.append((bin_dir, "bin"))
 
+# pywebview: the app's own window (WebKit on macOS, Edge WebView2 on Windows).
+wv_datas, wv_binaries, wv_hidden = [], [], []
+try:
+    wv_datas, wv_binaries, wv_hidden = collect_all("webview")
+except Exception:
+    pass
+if IS_WIN:
+    for package in ("clr_loader", "pythonnet"):
+        try:
+            d, b, h = collect_all(package)
+            wv_datas += d
+            wv_binaries += b
+            wv_hidden += h
+        except Exception:
+            pass
+
 a = Analysis(
     [os.path.join(ROOT, "main.py")],
     pathex=[ROOT],
-    datas=datas,
-    hiddenimports=["pystray._darwin" if IS_MAC else "pystray._win32" if IS_WIN else "pystray._xorg"],
+    datas=datas + wv_datas,
+    binaries=wv_binaries,
+    hiddenimports=wv_hidden + ["pystray._darwin" if IS_MAC else "pystray._win32" if IS_WIN else "pystray._xorg"],
     excludes=["yt_dlp", "tkinter"],
 )
 pyz = PYZ(a.pure)
@@ -86,7 +103,8 @@ if IS_MAC:
         info_plist={
             "CFBundleDisplayName": "Download Kar",
             "CFBundleShortVersionString": VERSION,
-            "LSUIElement": True,  # menu-bar app: no Dock icon
+            # The window is a normal app (Dock icon); the background service hides itself
+            # from the Dock at runtime and lives in the menu bar (see main.py).
             "NSHighResolutionCapable": True,
         },
     )

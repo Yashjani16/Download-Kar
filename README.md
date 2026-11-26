@@ -19,7 +19,8 @@ Free downloader for Windows and macOS, in two parts:
 **Desktop app**
 - Paste links (several at once) and pick MP4 or MP3 and quality.
 - Saves to `Downloads/Download Kar`.
-- Lives in the menu bar (Mac) or system tray (Windows). Windows can start it at sign-in.
+- Opens in its own app window. A small background service in the menu bar (Mac) or system tray (Windows) keeps working for the extension after you close the window. Windows can start it at sign-in.
+- Streams such as LinkedIn's (DASH/HLS) are joined into one MP4.
 - Updates yt-dlp by itself, so sites keep working.
 
 ## Publishing a release (GitHub builds everything)

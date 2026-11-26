@@ -428,9 +428,31 @@ const DISMISS_ICON = `<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="cu
     requestAnimationFrame(updatePosition);
   }
 
+  // Links that point at one video (YouTube watch/shorts, Instagram reels, X posts, ...).
+  const VIDEO_LINK = /(watch\?v=|\/shorts\/|\/reels?\/|\/p\/|\/posts\/|\/status\/|\/videos?\/|\/feed\/update\/|\/clip\/)/i;
+
+  // On feeds (YouTube home, LinkedIn feed, ...) the page address isn't the video's. Look
+  // around the hovered video for the link to that one video.
+  function videoLinkFor(media: HTMLMediaElement): string {
+    let node: Element | null = media;
+    for (let depth = 0; node && depth < 12; depth += 1, node = node.parentElement) {
+      const links = node.querySelectorAll<HTMLAnchorElement>("a[href]");
+      for (const link of Array.from(links)) {
+        if (VIDEO_LINK.test(link.href)) { return link.href; }
+      }
+    }
+    return "";
+  }
+
   async function sendPageToDesktop(media: HTMLMediaElement): Promise<void> {
     setPhase("busy", chrome.i18n.getMessage("sending"));
-    const result = await chrome.runtime.sendMessage({ type: "page_desktop_download", title: document.title });
+    const onVideoPage = VIDEO_LINK.test(location.href);
+    const link = onVideoPage ? "" : videoLinkFor(media);
+    const result = await chrome.runtime.sendMessage({
+      type: "page_desktop_download",
+      url: link,
+      title: link ? "" : document.title,
+    });
     const ok = Boolean(result?.ok);
     setPhase(ok ? "sent" : "failed", result?.message || chrome.i18n.getMessage(ok ? "sent" : "errorSendFailed"));
     window.__gdPageMedia?.markDispatchResult?.(media, ok, result?.message || "");

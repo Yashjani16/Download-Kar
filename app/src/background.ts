@@ -432,6 +432,17 @@ async function takeBrowserDownload(
   await resourceBridge.routeBrowserDownload(downloadItem);
 }
 
+function sameSite(a: string, b: string): boolean {
+  try {
+    const site = (host: string) => host.split(".").slice(-2).join(".");
+    const left = new URL(a);
+    const right = new URL(b);
+    return /^https?:$/.test(left.protocol) && site(left.hostname) === site(right.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function sendReply(sendResponse: (response?: unknown) => void, response: Promise<unknown>) {
   void response.then(sendResponse);
   return true;
@@ -600,7 +611,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // player's frame) to the desktop app. The address comes from the browser, not the page.
     const frameUrl = sender.url || sender.tab?.url || "";
     const title = sender.frameId ? "" : String(message.title ?? sender.tab?.title ?? "");
-    return sendReply(sendResponse, ready.then(() => desktopBridge.sendToDesktop(frameUrl, title)));
+    // The button may point at the hovered video's own link (feeds); only accept links on the
+    // same site as the page that sent it.
+    const link = typeof message.url === "string" ? message.url : "";
+    const target = link && sameSite(link, frameUrl) ? link : frameUrl;
+    return sendReply(sendResponse, ready.then(() => desktopBridge.sendToDesktop(target, title)));
   }
 
   if (message.type === "page_download_media") {

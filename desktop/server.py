@@ -18,7 +18,7 @@ from flask import Flask, jsonify, render_template, request
 
 APP_NAME = "Download Kar"
 APP_ID = "download-kar-desktop"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 PORT = int(os.environ.get("DK_PORT", "48123"))
 HOST = "127.0.0.1"
 MAX_PARALLEL = 3
@@ -228,11 +228,19 @@ def run_download(job_id: str) -> None:
                 fh.write(cookies)
             os.chmod(cookie_file, 0o600)
             cookie_args = ["--cookies", cookie_file]
+        if job.get("referer"):
+            cookie_args += ["--referer", job["referer"]]
+        # Streams (.mpd/.m3u8) have no real title of their own: name them after the page.
+        name_template = "%(title).150B.%(ext)s"
+        if job.get("use_title") and job.get("title"):
+            safe = "".join(c for c in job["title"] if c not in '\\/:*?"<>|\n\r\t').strip()[:150].strip(". ")
+            if safe:
+                name_template = safe.replace("%", "%%") + ".%(ext)s"
         cmd = base_args() + cookie_args + [
             "--newline", "--progress", "--progress-template", PROGRESS_TEMPLATE,
             "--print", f"after_move:{FILE_PREFIX}%(filepath)s",
             "-P", temp_dir,
-            "-o", "%(title).150B.%(ext)s",
+            "-o", name_template,
         ]
         if job["format"] == "audio":
             cmd += ["-x", "--audio-format", "mp3"]
@@ -303,13 +311,14 @@ def unique_path(path: str) -> str:
     return f"{stem} ({n}){ext}"
 
 
-def create_job(url: str, fmt: str, format_id: str, title: str, source: str, cookies: str = "") -> dict:
+def create_job(url: str, fmt: str, format_id: str, title: str, source: str, cookies: str = "",
+               referer: str = "", use_title: bool = False) -> dict:
     job_id = uuid.uuid4().hex[:10]
     job = {
         "id": job_id, "url": url, "title": title or url, "format": "audio" if fmt == "audio" else "video",
         "format_id": format_id, "status": "queued", "progress": 0, "downloaded": 0, "total": 0,
         "speed": 0, "eta": 0, "filename": "", "error": None, "created": int(time.time() * 1000),
-        "source": source, "_cookies": cookies,
+        "source": source, "_cookies": cookies, "referer": referer, "use_title": use_title,
     }
     with jobs_lock:
         jobs[job_id] = job
@@ -447,8 +456,11 @@ def start_download():
     cookies = str(data.get("cookies") or "")
     if not cookies.startswith("# Netscape HTTP Cookie File"):
         cookies = ""
+    referer = str(data.get("referer") or "")
+    if not referer.lower().startswith(("http://", "https://")):
+        referer = ""
     job = create_job(url, str(data.get("format", "video")), data.get("format_id") or "",
-                     str(data.get("title", "")), source, cookies)
+                     str(data.get("title", "")), source, cookies, referer, bool(data.get("use_title")))
     return jsonify({"job_id": job["id"], "job": public_job(job)})
 
 
