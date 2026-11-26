@@ -1,0 +1,181 @@
+# Builds everything users need and publishes a GitHub Release named after the version in
+# app/package.json (e.g. v1.1.0) whenever main changes or a v* tag is pushed. Release files:
+#   - DownloadKar-Extension-Chrome-<v>.zip / DownloadKar-Extension-Firefox-<v>.zip
+#   - DownloadKar-Desktop-Mac-AppleSilicon-<v>.dmg / DownloadKar-Desktop-Mac-Intel-<v>.dmg
+#   - DownloadKar-Desktop-Setup-<v>.exe (Windows)
+# To ship a new version: bump "version" in app/package.json and push to main.
+# "Run workflow" in the Actions tab builds without publishing.
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # One-time helper: if the project was uploaded as DownloadKar-GitHub-Upload.zip, unpack it
+  # into the repository, delete the zip and commit, then build from that commit.
+  unpack:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: commit
+        run: |
+          if [ -f DownloadKar-GitHub-Upload.zip ]; then
+            unzip -q DownloadKar-GitHub-Upload.zip -d /tmp/unpack
+            src=/tmp/unpack
+            if [ -d /tmp/unpack/Download-Kar ]; then src=/tmp/unpack/Download-Kar; fi
+            cp -R "$src"/. .
+            git rm -q DownloadKar-GitHub-Upload.zip
+            git add -A
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -q -m "Unpack project files from DownloadKar-GitHub-Upload.zip"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  version:
+    needs: unpack
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.unpack.outputs.sha }}
+      - id: read
+        run: echo "version=v$(node -p "require('./app/package.json').version")" >> "$GITHUB_OUTPUT"
+
+  extension:
+    needs: [unpack, version]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.unpack.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build extension
+        working-directory: app
+        env:
+          DK_RELEASES_URL: https://github.com/${{ github.repository }}/releases/latest
+        run: |
+          npm ci
+          npm run build
+      - name: Zip extension
+        run: |
+          V="${VERSION#v}"
+          mkdir -p out
+          for target in chromium firefox; do
+            cp LICENSE README.md "$target/"
+          done
+          (cd chromium && zip -qr "../out/DownloadKar-Extension-Chrome-$V.zip" .)
+          (cd firefox && zip -qr "../out/DownloadKar-Extension-Firefox-$V.zip" .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension
+          path: out/*
+
+  desktop:
+    needs: [unpack, version]
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: mac-arm64
+            label: Mac-AppleSilicon
+          - os: macos-15-intel
+            target: mac-x64
+            label: Mac-Intel
+          - os: windows-latest
+            target: windows-x64
+            label: Windows
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.unpack.outputs.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tools
+        run: python -m pip install -r requirements-build.txt
+      - name: Download yt-dlp, ffmpeg, ffprobe and deno
+        run: python packaging/fetch_tools.py ${{ matrix.target }}
+
+      - name: Sign bundled tools (macOS needs at least an ad-hoc signature)
+        if: runner.os == 'macOS'
+        run: |
+          for f in bin/*; do codesign --force --sign - "$f"; done
+
+      - name: Build app
+        run: |
+          export DK_VERSION="${VERSION#v}"
+          pyinstaller --noconfirm packaging/download-kar.spec
+
+      - name: Make .dmg
+        if: runner.os == 'macOS'
+        run: |
+          V="${VERSION#v}"
+          codesign --force --deep --sign - "dist/Download Kar.app"
+          mkdir -p dmg
+          cp -R "dist/Download Kar.app" dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "Download Kar" -srcfolder dmg -ov -format UDZO \
+            "dist/DownloadKar-Desktop-${{ matrix.label }}-$V.dmg"
+
+      - name: Make Windows installer
+        if: runner.os == 'Windows'
+        run: |
+          choco install innosetup -y --no-progress
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "//DAppVersion=${VERSION#v}" packaging/installer.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.label }}
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.exe
+
+  release:
+    if: github.event_name == 'push'
+    needs: [unpack, version, extension, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.version }}
+          target_commitish: ${{ needs.unpack.outputs.sha }}
+          name: Download Kar ${{ needs.version.outputs.version }}
+          make_latest: true
+          files: out/*
+          body: |
+            **Browser extension:** unzip `DownloadKar-Extension-Chrome` and load it from `chrome://extensions` (Developer mode → Load unpacked).
+
+            **Desktop app (needed for YouTube, Instagram, TikTok and 1000+ sites):**
+            - Mac with Apple chip (M1/M2/M3/M4): `Mac-AppleSilicon.dmg`
+            - Older Intel Mac: `Mac-Intel.dmg`
+            - Windows: `Setup.exe`
+
+            The app isn't signed by Apple/Microsoft yet. On Mac, if it says it can't be opened, go to System Settings → Privacy & Security → Open Anyway. On Windows, click More info → Run anyway.
