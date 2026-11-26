@@ -328,7 +328,14 @@ export function createLocalBridge(options: LocalBridgeOptions = {}) {
     for (const ref of desktopRefs.values()) {
       const job = desktopSnapshot.get(ref.id);
       const status = job ? (DESKTOP_STATUS[job.status] ?? "running") : "failed";
-      const name = job?.filename || ref.title || job?.title || ref.url;
+      let name = job?.filename || ref.title || job?.title || ref.url;
+      if (status === "failed" && job?.error) {
+        // Show why it failed, shortened, right in the Tasks list.
+        const reason = job.error.replace(/^\[[^\]]+\]\s*[^:]*:\s*/, "").replace(/\s*\(caused by.*$/, "");
+        name = `${name} — ${reason.length > 90 ? reason.slice(0, 87) + "…" : reason}`;
+      } else if (status === "failed" && !job) {
+        name = `${name} — ${msg("dkDesktopLost", "the Download Kar app was closed")}`;
+      }
       summaries.push({
         taskId: DESKTOP_TASK_PREFIX + ref.id,
         name,

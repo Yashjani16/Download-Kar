@@ -18,7 +18,7 @@ from flask import Flask, jsonify, render_template, request
 
 APP_NAME = "Download Kar"
 APP_ID = "download-kar-desktop"
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 PORT = int(os.environ.get("DK_PORT", "48123"))
 HOST = "127.0.0.1"
 MAX_PARALLEL = 3
@@ -233,7 +233,8 @@ def run_download(job_id: str) -> None:
         # Streams (.mpd/.m3u8) have no real title of their own: name them after the page.
         name_template = "%(title).150B.%(ext)s"
         if job.get("use_title") and job.get("title"):
-            safe = "".join(c for c in job["title"] if c not in '\\/:*?"<>|\n\r\t').strip()[:150].strip(". ")
+            safe = "".join(" " if c in '\\/:*?"<>|\n\r\t' else c for c in job["title"])
+            safe = " ".join(safe.split())[:150].strip(". ")
             if safe:
                 name_template = safe.replace("%", "%%") + ".%(ext)s"
         cmd = base_args() + cookie_args + [
@@ -256,48 +257,69 @@ def run_download(job_id: str) -> None:
         cmd.append(job["url"])
 
         try:
-            proc = subprocess.Popen(cmd, **popen_kwargs())
+            returncode, stderr = run_ytdlp(job, cmd)
+            if (returncode != 0 and UNUSUAL_EXT_ERROR in stderr and job["format"] != "audio"
+                    and job["status"] != "cancelled"):
+                # Some sites (LinkedIn) label their video pieces with an odd type such as
+                # "iso.segment", which yt-dlp refuses by default. Retry accepting it and
+                # convert the result to a normal .mp4; the file type is checked below.
+                job.update(status="downloading", progress=0, file=None)
+                retry = cmd[:-1] + ["--compat-options", "allow-unsafe-ext", "--remux-video", "mp4", cmd[-1]]
+                returncode, stderr = run_ytdlp(job, retry)
         except Exception as error:  # yt-dlp missing or not executable
             job.update(status="error", error=str(error))
+            shutil.rmtree(temp_dir, ignore_errors=True)
             return
-        job["_proc"] = proc
-        stderr_chunks = []
-        threading.Thread(target=lambda: stderr_chunks.append(proc.stderr.read()), daemon=True).start()
 
-        for line in proc.stdout:
-            line = line.strip()
-            if line.startswith(PROGRESS_PREFIX):
-                _, done, total, estimate, speed, eta = (line.split(" ") + ["NA"] * 6)[:6]
-                done_n, total_n = _num(done), _num(total) or _num(estimate)
-                job["downloaded"] = int(done_n)
-                job["total"] = int(total_n)
-                job["speed"] = int(_num(speed))
-                job["eta"] = int(_num(eta))
-                job["progress"] = round(done_n * 100 / total_n, 1) if total_n else job.get("progress", 0)
-                if job["progress"] >= 100:
-                    job["status"] = "processing"
-                else:
-                    job["status"] = "downloading"
-            elif line.startswith(FILE_PREFIX):
-                job["file"] = line[len(FILE_PREFIX):]
-
-        proc.wait()
-        job.pop("_proc", None)
         try:
             if job["status"] == "cancelled":
                 return
-            if proc.returncode != 0:
-                time.sleep(0.2)
-                job.update(status="error", error=last_error_line("".join(stderr_chunks)))
+            if returncode != 0:
+                job.update(status="error", error=last_error_line(stderr))
                 return
             if not job.get("file") or not os.path.exists(job["file"]):
                 job.update(status="error", error="Download finished but the file was not found")
                 return
-            final = unique_path(os.path.join(download_dir(), os.path.basename(job["file"])))
+            name = os.path.basename(job["file"]).replace(".iso.segment", "")
+            if os.path.splitext(name)[1].lower().lstrip(".") not in SAFE_EXTENSIONS:
+                job.update(status="error", error=f"Refused to save an unexpected file type: {name}")
+                return
+            final = unique_path(os.path.join(download_dir(), name))
             shutil.move(job["file"], final)
             job.update(status="done", progress=100, file=final, filename=os.path.basename(final))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+UNUSUAL_EXT_ERROR = "is unusual and will be skipped for safety reasons"
+SAFE_EXTENSIONS = {"mp4", "m4a", "m4v", "mov", "mp3", "webm", "mkv", "ogg", "oga", "opus", "wav", "flac", "aac"}
+
+
+def run_ytdlp(job: dict, cmd: list):
+    """Run one yt-dlp attempt for a job, updating its progress. Returns (returncode, stderr)."""
+    proc = subprocess.Popen(cmd, **popen_kwargs())
+    job["_proc"] = proc
+    stderr_chunks = []
+    reader = threading.Thread(target=lambda: stderr_chunks.append(proc.stderr.read()), daemon=True)
+    reader.start()
+    for line in proc.stdout:
+        line = line.strip()
+        if line.startswith(PROGRESS_PREFIX):
+            _, done, total, estimate, speed, eta = (line.split(" ") + ["NA"] * 6)[:6]
+            done_n, total_n = _num(done), _num(total) or _num(estimate)
+            job["downloaded"] = int(done_n)
+            job["total"] = int(total_n)
+            job["speed"] = int(_num(speed))
+            job["eta"] = int(_num(eta))
+            job["progress"] = round(done_n * 100 / total_n, 1) if total_n else job.get("progress", 0)
+            if job["status"] != "cancelled":
+                job["status"] = "processing" if job["progress"] >= 100 else "downloading"
+        elif line.startswith(FILE_PREFIX):
+            job["file"] = line[len(FILE_PREFIX):]
+    proc.wait()
+    reader.join(timeout=5)
+    job.pop("_proc", None)
+    return proc.returncode, "".join(stderr_chunks)
 
 
 def unique_path(path: str) -> str:

@@ -430,7 +430,7 @@ const DISMISS_ICON = `<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="cu
   }
 
   // Links that point at one video (YouTube watch/shorts, Instagram reels, X posts, ...).
-  const VIDEO_LINK = /(watch\?v=|\/shorts\/|\/reels?\/|\/p\/|\/posts\/|\/status\/|\/videos?\/|\/feed\/update\/|\/clip\/)/i;
+  const VIDEO_LINK = /(watch\?v=|\/shorts\/|\/reels?\/|\/p\/|\/posts\/|\/status\/|\/videos?\/|\/clip\/)/i;
 
   // On feeds (YouTube home, LinkedIn feed, ...) the page address isn't the video's. Look
   // around the hovered video for the link to that one video.
@@ -445,10 +445,20 @@ const DISMISS_ICON = `<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="cu
     return "";
   }
 
+  // Social sites whose pages are feeds unless the address points at one video.
+  const FEED_SITES = /(^|\.)(linkedin\.com|youtube\.com|instagram\.com|facebook\.com|x\.com|twitter\.com|tiktok\.com)$/i;
+
   async function sendPageToDesktop(media: HTMLMediaElement): Promise<void> {
-    setPhase("busy", chrome.i18n.getMessage("sending"));
     const onVideoPage = VIDEO_LINK.test(location.href);
     const link = onVideoPage ? "" : videoLinkFor(media);
+    if (!onVideoPage && !link && FEED_SITES.test(location.hostname)) {
+      // A feed's address isn't one video. Once the video has played a moment, its stream
+      // is known and the next click works.
+      if (media.paused) { void media.play().catch(() => undefined); }
+      setPhase("failed", chrome.i18n.getMessage("dkPlayFirst"));
+      return;
+    }
+    setPhase("busy", chrome.i18n.getMessage("sending"));
     const result = await chrome.runtime.sendMessage({
       type: "page_desktop_download",
       url: link,

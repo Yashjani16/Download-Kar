@@ -8,7 +8,7 @@ from PyInstaller.utils.hooks import collect_all
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
-VERSION = os.environ.get("DK_VERSION", "1.2.2")
+VERSION = os.environ.get("DK_VERSION", "1.2.3")
 
 datas = [
     (os.path.join(ROOT, "templates"), "templates"),

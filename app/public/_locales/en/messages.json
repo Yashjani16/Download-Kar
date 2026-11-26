@@ -677,7 +677,7 @@
     "message": "Starting"
   },
   "sent": {
-    "message": "Downloaded"
+    "message": "Started — see Tasks"
   },
   "sentToBrowserDownload": {
     "message": "Download started"
@@ -1898,5 +1898,11 @@
   },
   "dkDesktopOff": {
     "message": "Desktop app not running"
+  },
+  "dkPlayFirst": {
+    "message": "Let the video play for a moment, then click Download again"
+  },
+  "dkDesktopLost": {
+    "message": "the Download Kar app was closed"
   }
 }
