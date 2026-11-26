@@ -1,0 +1,10 @@
+node_modules/
+chromium/
+firefox/
+desktop/bin/
+desktop/build/
+desktop/dist/
+__pycache__/
+*.pyc
+.DS_Store
+upstream/

@@ -2,7 +2,7 @@
 ; Build from the desktop/ folder after PyInstaller:  iscc /DAppVersion=1.0.0 packaging\installer.iss
 
 #ifndef AppVersion
-  #define AppVersion "1.1.0"
+  #define AppVersion "1.1.1"
 #endif
 
 [Setup]

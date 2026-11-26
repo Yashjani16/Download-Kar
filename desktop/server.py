@@ -18,7 +18,7 @@ from flask import Flask, jsonify, render_template, request
 
 APP_NAME = "Download Kar"
 APP_ID = "download-kar-desktop"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 PORT = int(os.environ.get("DK_PORT", "48123"))
 HOST = "127.0.0.1"
 MAX_PARALLEL = 3
@@ -76,13 +76,10 @@ def _install_tool(name: str, keep_existing: bool = False) -> str:
 
 
 def _ytdlp_command() -> list:
-    installed = _install_tool("yt-dlp", keep_existing=True)
-    if installed:
-        return [installed]
-    on_path = shutil.which("yt-dlp")
-    if on_path:
-        return [on_path]
-    return [sys.executable, "-m", "yt_dlp"]
+    """yt-dlp runs through the app's own `dk-ytdlp` helper (built in, same CPU architecture)."""
+    if IS_FROZEN:
+        return [os.path.join(os.path.dirname(sys.executable), "dk-ytdlp" + EXE)]
+    return [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ytdlp_runner.py")]
 
 
 YTDLP = _ytdlp_command()
@@ -109,18 +106,62 @@ def popen_kwargs() -> dict:
     return kwargs
 
 
-def update_ytdlp_in_background() -> None:
-    if not YTDLP or not YTDLP[0].startswith(data_dir()):
-        return
+YTDLP_LATEST_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
+YTDLP_UPDATE_EVERY = 12 * 3600
 
-    def run():
+
+def ytdlp_version(extra_env=None, with_source=False) -> str:
+    """yt-dlp's version ("" if it doesn't run); with_source adds "update"/"built-in"."""
+    env = dict(os.environ, **(extra_env or {}))
+    try:
+        result = subprocess.run(YTDLP + ["--dk-source"], timeout=120, env=env, **popen_kwargs())
+        out = result.stdout.strip() if result.returncode == 0 else ""
+        return out if with_source else out.split(" ")[0]
+    except Exception:
+        return ""
+
+
+def update_ytdlp() -> None:
+    """Download yt-dlp's newest release and switch to it only if it runs correctly."""
+    import ssl
+    import urllib.request
+
+    target = os.path.join(data_dir(), "yt-dlp-latest.zip")
+    if os.path.isfile(target) and time.time() - os.path.getmtime(target) < YTDLP_UPDATE_EVERY:
+        return
+    try:
+        import certifi
+        context = ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE") or certifi.where())
+    except Exception:
+        context = ssl.create_default_context()
+    candidate = target + ".new"
+    try:
+        with urllib.request.urlopen(YTDLP_LATEST_URL, timeout=120, context=context) as response:
+            data = response.read()
+        with open(candidate, "wb") as fh:
+            fh.write(data)
+        new = ytdlp_version({"DK_YTDLP_ZIP": candidate}, with_source=True)
+        builtin_version = ytdlp_version({"DK_BUILTIN_YTDLP": "1"})
+        new_version = new.split(" ")[0] if new.endswith(" update") else ""
+        if new_version and new_version >= builtin_version:
+            os.replace(candidate, target)
+        else:
+            os.remove(candidate)
+            os.utime(target) if os.path.isfile(target) else None
+    except Exception:
         try:
-            kw = popen_kwargs()
-            subprocess.run(YTDLP + ["-U"], timeout=180, **kw)
-        except Exception:
+            os.remove(candidate)
+        except OSError:
             pass
 
-    threading.Thread(target=run, daemon=True).start()
+
+def update_ytdlp_in_background() -> None:
+    def loop():
+        while True:
+            update_ytdlp()
+            time.sleep(YTDLP_UPDATE_EVERY)
+
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def parse_ytdlp_json(stdout: str) -> dict:
@@ -172,16 +213,16 @@ def run_download(job_id: str) -> None:
         if job["status"] == "cancelled":
             return
         job["status"] = "downloading"
-        out_template = os.path.join(download_dir(), "%(title).150B.%(ext)s")
-        # Each job gets its own temp folder for partial files, so two jobs for the same
-        # video (say MP4 and MP3) never touch each other's files.
+        # Each job downloads into its own private folder and the finished file is moved into
+        # Downloads afterwards, so two jobs for the same video (say MP4 and MP3) never touch
+        # each other's files and an existing file is never overwritten or reused.
         temp_dir = os.path.join(data_dir(), "tmp", job_id)
         os.makedirs(temp_dir, exist_ok=True)
         cmd = base_args() + [
             "--newline", "--progress", "--progress-template", PROGRESS_TEMPLATE,
             "--print", f"after_move:{FILE_PREFIX}%(filepath)s",
-            "-P", f"temp:{temp_dir}",
-            "-o", out_template,
+            "-P", temp_dir,
+            "-o", "%(title).150B.%(ext)s",
         ]
         if job["format"] == "audio":
             cmd += ["-x", "--audio-format", "mp3"]
@@ -220,17 +261,32 @@ def run_download(job_id: str) -> None:
 
         proc.wait()
         job.pop("_proc", None)
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        if job["status"] == "cancelled":
-            return
-        if proc.returncode != 0:
-            time.sleep(0.2)
-            job.update(status="error", error=last_error_line("".join(stderr_chunks)))
-            return
-        if not job.get("file") or not os.path.exists(job["file"]):
-            job.update(status="error", error="Download finished but the file was not found")
-            return
-        job.update(status="done", progress=100, filename=os.path.basename(job["file"]))
+        try:
+            if job["status"] == "cancelled":
+                return
+            if proc.returncode != 0:
+                time.sleep(0.2)
+                job.update(status="error", error=last_error_line("".join(stderr_chunks)))
+                return
+            if not job.get("file") or not os.path.exists(job["file"]):
+                job.update(status="error", error="Download finished but the file was not found")
+                return
+            final = unique_path(os.path.join(download_dir(), os.path.basename(job["file"])))
+            shutil.move(job["file"], final)
+            job.update(status="done", progress=100, file=final, filename=os.path.basename(final))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def unique_path(path: str) -> str:
+    """`video.mp4` -> `video (2).mp4` if a file with that name already exists."""
+    if not os.path.exists(path):
+        return path
+    stem, ext = os.path.splitext(path)
+    n = 2
+    while os.path.exists(f"{stem} ({n}){ext}"):
+        n += 1
+    return f"{stem} ({n}){ext}"
 
 
 def create_job(url: str, fmt: str, format_id: str, title: str, source: str) -> dict:
@@ -305,6 +361,14 @@ def index():
 def ping():
     return jsonify({"app": APP_ID, "version": VERSION, "downloadDir": download_dir(),
                     "ffmpeg": bool(FFMPEG), "deno": bool(DENO)})
+
+
+@app.route("/api/diagnostics")
+def diagnostics():
+    """Quick health check: open http://127.0.0.1:48123/api/diagnostics in a browser."""
+    return jsonify({"version": VERSION, "ytdlp": ytdlp_version(with_source=True) or "NOT WORKING",
+                    "ffmpeg": FFMPEG or "missing", "deno": DENO or "missing",
+                    "downloadDir": download_dir(), "dataDir": data_dir()})
 
 
 @app.route("/api/info", methods=["POST"])
